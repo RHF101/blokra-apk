@@ -1,0 +1,68 @@
+name: Build Native APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      GODOT_VERSION: "4.7.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "build-tools;34.0.0" "platforms;android-34"
+
+      - name: Install Godot and export templates
+        run: |
+          set -e
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          wget -q "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
+          TPL="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p "$TPL"
+          unzip -q "Godot_v${GODOT_VERSION}-stable_export_templates.tpz" -d tmp_tpl
+          mv tmp_tpl/templates/* "$TPL/"
+
+      - name: Create debug keystore
+        run: |
+          keytool -genkey -v -keystore "$RUNNER_TEMP/debug.keystore" \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Import and validate
+        run: |
+          godot --headless --import
+          godot --headless --check-only --script res://scripts/main.gd
+          godot --headless --script res://tests/validate_build.gd
+          godot --headless --quit-after 2
+
+      - name: Export debug APK
+        env:
+          GODOT_ANDROID_SDK_PATH: ${{ env.ANDROID_HOME }}
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ runner.temp }}/debug.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          mkdir -p build
+          godot --headless --export-debug "Android" build/blokra-debug.apk
+          ls -lh build/blokra-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blokra-debug-apk
+          path: build/blokra-debug.apk
